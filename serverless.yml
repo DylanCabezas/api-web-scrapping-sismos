@@ -1,5 +1,5 @@
 org: dylancabezas
-service: api-web-scraping-sismos
+service: api-web-scrapping-sismos
 
 provider:
   name: aws
