@@ -1,67 +1,40 @@
-from requests_html import HTMLSession
+import requests
 from bs4 import BeautifulSoup
 import boto3
 import uuid
-import json
-import traceback
 
 def lambda_handler(event, context):
-    try:
-        session = HTMLSession()
-        url = "https://ultimosismo.igp.gob.pe/ultimo-sismo/sismos-reportados"
-        
-        resp = session.get(url)
-        resp.html.render(timeout=20, sleep=2)  # Ejecuta el JS
+    url = "https://ultimosismo.igp.gob.pe/ultimo-sismo/sismos-reportados"
+    response = requests.get(url)
+    if response.status_code != 200:
+        return {'statusCode': response.status_code, 'body': 'Error al acceder a la página web'}
 
-        soup = BeautifulSoup(resp.html.html, 'html.parser')
-        table = soup.find('table')
-        if not table:
-            return {'statusCode': 404, 'body': json.dumps({'error': 'No se encontró la tabla'})}
+    soup = BeautifulSoup(response.content, 'html.parser')
+    table = soup.find('table')
+    if not table:
+        return {'statusCode': 404, 'body': 'No se encontró la tabla en la página web'}
 
-        headers = [th.text.strip() for th in table.find_all('th')]
-        if not headers:
-            return {'statusCode': 400, 'body': json.dumps({'error': 'La tabla no tiene encabezados'})}
-        rows = []
-        for tr in table.find_all('tr')[1:]:
-            cells = tr.find_all('td')
-            if not cells:
-                continue
-            row_data = {}
-            for i, cell in enumerate(cells):
-                if i < len(headers):
-                    row_data[headers[i]] = cell.text.strip()
-            rows.append(row_data)
+    headers = [th.get_text(strip=True) for th in table.find_all('th')]
+    rows = []
+    for tr in table.find_all('tr')[1:]:
+        cells = [td.get_text(strip=True) for td in tr.find_all('td')]
+        if len(cells) != len(headers):
+            continue
+        row_data = {headers[i]: cells[i] for i in range(len(headers))}
+        rows.append(row_data)
 
-        # 👉 Limitar a las primeras 10 filas
-        rows = rows[:10]
+    dynamodb = boto3.resource('dynamodb')
+    table_db = dynamodb.Table('TablaWebScrapping')
 
-        dynamodb = boto3.resource('dynamodb')
-        tabla_dynamo = dynamodb.Table('web-scrapping-sismos')
+    existing = table_db.scan().get('Items', [])
+    with table_db.batch_writer() as batch:
+        for it in existing:
+            batch.delete_item(Key={'id': it['id']})
 
-        # Eliminar todos los registros previos
-        scan = tabla_dynamo.scan()
-        with tabla_dynamo.batch_writer() as batch:
-            for item in scan['Items']:
-                batch.delete_item(Key={'id': item['id']})
+    for idx, row in enumerate(rows, start=1):
+        item = row.copy()
+        item['#'] = idx
+        item['id'] = str(uuid.uuid4())
+        table_db.put_item(Item=item)
 
-        # Insertar solo las 10 primeras filas
-        for i, row in enumerate(rows, start=1):
-            row['#'] = i
-            row['id'] = str(uuid.uuid4())
-            tabla_dynamo.put_item(Item=row)
-
-        return {
-            'statusCode': 200,
-            'body': json.dumps(rows, ensure_ascii=False)
-        }
-
-    except Exception as e:
-        error_log = {
-            'error': str(e),
-            'traceback': traceback.format_exc()
-        }
-        print(json.dumps(error_log))
-        return {
-            'statusCode': 500,
-            'body': json.dumps({'error': str(e)})
-        }
+    return {'statusCode': 200, 'body': rows}
