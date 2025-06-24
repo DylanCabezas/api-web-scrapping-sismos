@@ -36,7 +36,7 @@ def lambda_handler(event, context):
         rows = rows[:10]
 
         dynamodb = boto3.resource('dynamodb')
-        tabla_dynamo = dynamodb.Table('TablaWebScrapping')
+        tabla_dynamo = dynamodb.Table('web-scrapping-sismos')
 
         # Eliminar todos los registros previos
         scan = tabla_dynamo.scan()
